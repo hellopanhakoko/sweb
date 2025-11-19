@@ -19,7 +19,7 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 # KHQR setup
-api_token_bakong = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7ImlkIjoiY2U3NTMwODdiMjQ5NDQzZSJ9LCJpYXQiOjE3NjE1MzU0MjgsImV4cCI6MTc2OTMxMTQyOH0.e3w8uD5-GEtN_K_tFK0dydN8M0f4bxh_Qj3Y0AMaIzk"
+api_token_bakong = os.getenv("KHQR_API_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7ImlkIjoiY2U3NTMwODdiMjQ5NDQzZSJ9LCJpYXQiOjE3NjE1MzU0MjgsImV4cCI6MTc2OTMxMTQyOH0.e3w8uD5-GEtN_K_tFK0dydN8M0f4bxh_Qj3Y0AMaIzk")
 khqr = KHQR(api_token_bakong)
 BANK_ACCOUNT = os.getenv("BANK_ACCOUNT", "chhira_ly@aclb")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "855882000544")
@@ -45,7 +45,7 @@ payments = {}
 def generate_short_transaction_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-# Generate QR code
+# Generate QR code with error logging
 def generate_qr_code(amount):
     try:
         qr_string = khqr.create_qr(
@@ -67,7 +67,7 @@ def generate_qr_code(amount):
         md5 = khqr.generate_md5(qr_string)
         return qr_base64, md5
     except Exception as e:
-        print(f"Error generating QR: {e}")
+        print("QR generation failed:", e)
         return None, None
 
 # Background payment checker
@@ -108,7 +108,7 @@ async def buy(request: Request, item_id: str):
     item = items[item_id]
     qr_base64, md5 = generate_qr_code(item['price'])
     if not qr_base64 or not md5:
-        return HTMLResponse("Failed to generate QR code. Try again.", status_code=500)
+        return HTMLResponse("Failed to generate QR code. Check server logs.", status_code=500)
     payments[md5] = {
         "status": "pending",
         "message": None,
