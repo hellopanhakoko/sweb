@@ -1,4 +1,6 @@
-from flask import Flask, render_template, request, jsonify, session
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 import qrcode
 import os
 import random
@@ -12,20 +14,20 @@ from bakong_khqr import KHQR
 from io import BytesIO
 import base64
 
-app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'  # Change this to a secure key
+app = FastAPI()
+templates = Jinja2Templates(directory="../templates")
 
-# Bakong KHQR setup (same as before)
-api_token_bakong = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7ImlkIjoiY2U3NTMwODdiMjQ5NDQzZSJ9LCJpYXQiOjE3NjE1MzU0MjgsImV4cCI6MTc2OTMxMTQyOH0.e3w8uD5-GEtN_K_tFK0dydN8M0f4bxh_Qj3Y0AMaIzk"
+# KHQR Setup
+api_token_bakong = os.getenv("KHQR_API_TOKEN", "YOUR_API_TOKEN")
 khqr = KHQR(api_token_bakong)
 BANK_ACCOUNT = os.getenv("BANK_ACCOUNT", "chhira_ly@aclb")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "855882000544")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Phnom_Penh")
 
-# List of 10 items with various prices
+# Items
 items = {
     '86': {'name': '86 Diamonds', 'price': 1.18},
-    '172': {'name': '172  Diamonds', 'price': 2.35},
+    '172': {'name': '172 Diamonds', 'price': 2.35},
     'phone': {'name': 'Smartphone', 'price': 800.0},
     'laptop': {'name': 'Laptop', 'price': 1200.0},
     'book': {'name': 'Book', 'price': 15.0},
@@ -36,11 +38,12 @@ items = {
     'shoes': {'name': 'Running Shoes', 'price': 80.0}
 }
 
-# Generate short transaction ID
+# Payment tracking
+payments = {}
+
 def generate_short_transaction_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-# Generate QR code and return base64 encoded image
 def generate_qr_code(amount):
     try:
         qr_string = khqr.create_qr(
@@ -62,59 +65,35 @@ def generate_qr_code(amount):
         md5 = khqr.generate_md5(qr_string)
         return qr_base64, md5
     except Exception as e:
-        print(f"Error generating QR: {e}")
+        print("QR error:", e)
         return None, None
 
-# Check payment status
 def check_payment(md5, amount, item_name):
-    def poll():
-        start_time = time.time()
-        while time.time() - start_time < 180:  # 3 minutes
-            try:
-                url = f"https://panha-dev.vercel.app/check_payment/{md5}"
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                if data.get("success") and data.get("status") == "PAID":
-                    # Payment successful
-                    timezone = pytz.timezone(TIMEZONE)
-                    current_time = datetime.now(timezone).strftime("%d/%m/%Y %H:%M")
-                    session['payment_status'] = 'success'
-                    session['message'] = f"Thank you for buying the {item_name}! Payment of ${amount:.2f} received at {current_time}."
-                    break
-            except Exception as e:
-                print(f"Payment check error: {e}")
-            time.sleep(10)
-        else:
-            session['payment_status'] = 'failed'
-            session['message'] = "Payment not received within 3 minutes. Please try again."
-            session.pop('qr_code', None)  # Remove QR code from session on timeout
-    threading.Thread(target=poll).start()
+    # Vercel cannot run long-running threads for >10s, so polling must be done on frontend
+    pass  # We will let frontend call /status repeatedly
 
-@app.route('/')
-def shop():
-    return render_template('shop.html', items=items)
+@app.get("/", response_class=HTMLResponse)
+async def shop(request: Request):
+    return templates.TemplateResponse("shop.html", {"request": request, "items": items})
 
-@app.route('/buy/<item_id>')
-def buy(item_id):
+@app.get("/buy/{item_id}", response_class=HTMLResponse)
+async def buy(request: Request, item_id: str):
     if item_id not in items:
-        return "Item not found", 404
+        raise HTTPException(status_code=404, detail="Item not found")
     item = items[item_id]
-    qr_base64, md5 = generate_qr_code(item['price'])
-    if not qr_base64 or not md5:
-        return "Failed to generate QR code. Try again.", 500
-    session['qr_code'] = qr_base64
-    session['payment_status'] = 'pending'
-    session['message'] = None
-    check_payment(md5, item['price'], item['name'])
-    return render_template('buy.html', item=item, qr_code=qr_base64)
+    qr_code, md5 = generate_qr_code(item["price"])
+    if not qr_code:
+        return HTMLResponse("Failed to generate QR code", status_code=500)
+    payments[md5] = {
+        "status": "pending",
+        "message": None,
+        "qr_code": qr_code,
+        "item_name": item["name"],
+        "amount": item["price"]
+    }
+    return templates.TemplateResponse("buy.html", {"request": request, "item": item, "qr_code": qr_code, "md5": md5})
 
-@app.route('/status')
-def status():
-    return jsonify({
-        'status': session.get('payment_status', 'pending'),
-        'message': session.get('message')
-    })
-
-if __name__ == '__main__':
-    app.run(debug=True)
+@app.get("/status/{md5}")
+async def status(md5: str):
+    # Frontend must poll /status for updates
+    return JSONResponse(payments.get(md5, {"status": "not_found", "message": "Invalid transaction."}))
