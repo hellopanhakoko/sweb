@@ -1,6 +1,7 @@
 fastapi
+uvicorn
 jinja2
-requests
 qrcode
 pytz
+requests
 bakong-khqr
