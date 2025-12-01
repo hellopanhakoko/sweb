@@ -95,10 +95,46 @@ def check_payment(md5, amount, item_name):
         payments[md5]["qr_code"] = None
     threading.Thread(target=poll, daemon=True).start()
 
-# Shop page
+def get_item_prices(game):
+    # Replace with your real function to fetch prices
+    if game == "MLBB":
+        return {"86": {"normal": 1.18}, "172": {"normal": 2.35}}
+    elif game == "FF":
+        return {"50": {"normal": 0.99}, "100": {"normal": 1.85}}
+    return {}
+
+def is_reseller(user_id):
+    # Replace with your logic
+    return False
+
 @app.get("/", response_class=HTMLResponse)
-async def shop(request: Request):
-    return templates.TemplateResponse("shop.html", {"request": request, "items": items})
+async def home(request: Request):
+    # Simulate session
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in sessions:
+        session_id = "demo_session"
+        sessions[session_id] = {"user_id": 1, "username": "demo_user"}
+
+        # Save demo user to DB
+        with sqlite3.connect(DB) as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT OR IGNORE INTO users(user_id, username) VALUES(?, ?)",
+                (1, "demo_user")
+            )
+            conn.commit()
+
+    session = sessions[session_id]
+
+    ml_items = get_item_prices("MLBB")
+    ff_items = get_item_prices("FF")
+    response = templates.TemplateResponse(
+        "shop.html",
+        {"request": request, "ml_items": ml_items, "ff_items": ff_items, "reseller": is_reseller(session["user_id"])}
+    )
+    # Set session cookie (demo)
+    response.set_cookie(key="session_id", value=session_id)
+    return response
 
 # Buy page
 @app.get("/buy/{item_id}", response_class=HTMLResponse)
